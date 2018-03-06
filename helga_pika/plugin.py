@@ -15,7 +15,11 @@ logger = log.getLogger(__name__)
 def run(connection, key=None):
     prefix = settings.NICK
     queue_name = "%s.%s" % (prefix, key)
-    channel = yield connection.channel()
+    try:
+        logger.info('Processing connection %s' % str(connection))
+        channel = yield connection.channel()
+    except Exception as error:
+        logger.exception('Unable to process channel from connection: %s' % connection)
     exchange_name = settings.RABBITMQ_EXCHANGE
 
     try:
@@ -74,18 +78,17 @@ def init_connection(client):
                                            RABBITMQ_PORT,
                                            '/',
                                            credentials)
-    cc = protocol.ClientCreator(reactor, twisted_connection.TwistedProtocolConnection, parameters)
-    # unsure why we need both of these again?
-    d = cc.connectTCP(settings.RABBITMQ_HOST, RABBITMQ_PORT)
-    d.addErrback(fatalError)
-    d.addCallback(lambda protocol: protocol.ready)
     for key in settings.RABBITMQ_ROUTING_KEYS:
-        try:
-            d.addCallback(run, key=key)
-            logger.info('Added channel for key: %s' % key)
-        except Exception as error:
-            logger.exception('got error process adding of a callback')
-            logger(error)
+        cc = protocol.ClientCreator(reactor, twisted_connection.TwistedProtocolConnection, parameters)
+        # unsure why we need both of these again?
+        d = cc.connectTCP(settings.RABBITMQ_HOST, RABBITMQ_PORT)
+        d.addErrback(fatalError)
+        d.addErrback(err)
+        d.addCallback(lambda protocol: protocol.ready)
+        d.addErrback(fatalError)
+        d.addCallback(run, key=key)
+        logger.info('Added channel for key: %s' % key)
+        d.addErrback(fatalError)
 
 
 @command('bus', help='An interface for the RABBITMQ Message Bus')
@@ -95,7 +98,5 @@ def bus(client, channel, nick, message, cmd, args):
 
 
 def fatalError(reason):
-    #XXX this is extremely poor error handling
-    msg = "Unhandled error ocurred"
-    logger.critical("%s %s" % (str(reason), msg))
-    err(reason, msg)
+    logger.critical("Unhandled error ocurred")
+    logger.critical(reason.getTraceback())
